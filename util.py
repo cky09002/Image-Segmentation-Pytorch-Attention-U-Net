@@ -4,10 +4,13 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 from torch.utils.data import DataLoader
-from torchvision.transforms import v2,InterpolationMode
+from torchvision.transforms import v2,InterpolationMode,functional
 from torchvision import utils
 from dataset import _Dataset
 from CONFIG import *
+import torch.nn.functional as F
+import glob
+import re
 try:
     from tqdm.notebook import tqdm
 except ImportError:
@@ -36,19 +39,23 @@ def get_loss_function(loss_type):
     import torch.nn as nn
     
     class CombinedLoss(nn.Module):
-        def __init__(self):
+        def __init__(self, dice_co=0.7):
             super().__init__()
             self.bce = nn.BCEWithLogitsLoss()
-        
+            self.dice_co = dice_co
+            self.bce_co = 1 - dice_co
+            
         def dice_loss(self, pred, target):
             smooth = 1e-5
-            pred = torch.sigmoid(pred)
+            #pred = torch.sigmoid(pred)
             intersection = (pred * target).sum()
             dice = (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
             return 1 - dice
         
         def forward(self, pred, target):
-            return 0.5 * self.bce(pred, target) + 0.5 * self.dice_loss(pred, target)
+            bce = self.bce(pred, target)
+            dice = self.dice_loss(pred, target)
+            return self.bce_co * bce + self.dice_co * dice
     
     if loss_type == 'combined': 
         return CombinedLoss()
@@ -99,53 +106,139 @@ def get_loaders(train_dir = TRAIN_DIR, test_dir = TEST_DIR, batch_size = BATCH_S
     
     return train_loader, test_loader
 
-def visualize_samples(loader, n=4, title=None):
+def visualize_samples(loader_or_dataset, n=4, title=None, mode="first"):
+    """
+    Visualize first/last n samples. Accepts either a DataLoader or a Dataset.
+    Automatically unnormalizes ImageNet-normalized tensors for display.
+    """
+    # accept DataLoader or Dataset
+    if hasattr(loader_or_dataset, "dataset"):
+        dataset = loader_or_dataset.dataset
+    else:
+        dataset = loader_or_dataset
+
     if title is None:
-        title = "Dataset first" + str(n)  # set dynamically at runtime
-    
-    dataset = loader.dataset
-    n = min(n, len(dataset))
-    
-    plt.figure(figsize=(8, 2 * n))
-    for i in range(n):
-        img, mask = dataset[i]
-        
-        # Convert tensor to numpy (C,H,W -> H,W,C) if needed
-        if hasattr(img, "permute"):
-            img_np = img.permute(1, 2, 0).cpu().numpy()
-        else:
-            img_np = np.array(img)
-        
-        mask_np = mask.squeeze().cpu().numpy() if hasattr(mask, "cpu") else np.array(mask)
-        
-        # Plot image
-        plt.subplot(n, 2, 2*i + 1)
-        plt.imshow(img_np, cmap='gray')
-        plt.axis('off')
-        if i == 0: plt.title(f"{title} - Image")
-        
-        # Plot mask
-        plt.subplot(n, 2, 2*i + 2)
-        plt.imshow(mask_np, cmap='gray')
-        plt.axis('off')
-        if i == 0: plt.title(f"{title} - Mask")
-    
+        title = f"Dataset {mode} {n}"
+
+    total = len(dataset)
+    if total == 0:
+        print("No samples to show.")
+        return
+
+    n = max(1, min(n, total // 2 if mode in ("first_last",) else total))
+
+    # indices depending on mode
+    if mode == "first":
+        indices = list(range(0, n))
+    elif mode == "last":
+        indices = list(range(total - n, total))
+    elif mode == "first_last":
+        # special layout handled below
+        indices = None
+    else:
+        raise ValueError("mode must be 'first', 'last', or 'first_last'")
+
+    IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32)
+    IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32)
+
+    def to_display_np(img):
+        # torch Tensor CxHxW
+        if isinstance(img, torch.Tensor):
+            t = img.detach().cpu().float().clone()
+            if t.ndim == 2:
+                t = t.unsqueeze(0)
+            # if values appear normalized (negatives or >1) -> unnormalize
+            if t.max() > 1.1 or t.min() < -0.1:
+                mean = IMAGENET_MEAN.view(-1,1,1)
+                std = IMAGENET_STD.view(-1,1,1)
+                if t.shape[0] == 1:
+                    mean = mean[:1]; std = std[:1]
+                t = t * std + mean
+            t = torch.clamp(t, 0.0, 1.0)
+            np_img = t.permute(1,2,0).numpy()
+            if np_img.shape[2] == 1:
+                np_img = np_img[:,:,0]
+            return np_img
+        # numpy / PIL fallback
+        arr = np.asarray(img).astype(np.float32)
+        if arr.dtype == np.uint8:
+            arr = arr / 255.0
+        # if HxWxC with values >>1 assume 0-255
+        if arr.ndim == 3 and arr.max() > 1.1:
+            arr = arr / 255.0
+        return arr
+
+    # layout
+    if mode == "first_last":
+        n = max(1, min(n, total // 2))
+        plt.figure(figsize=(16, 2 * n))
+        for row in range(n):
+            idx_f = row
+            idx_l = total - n + row
+            img_f, mask_f = dataset[idx_f]
+            img_l, mask_l = dataset[idx_l]
+
+            img_f_np = to_display_np(img_f)
+            img_l_np = to_display_np(img_l)
+
+            # masks
+            m_f = mask_f.squeeze().cpu().numpy() if isinstance(mask_f, torch.Tensor) else np.asarray(mask_f).squeeze()
+            m_l = mask_l.squeeze().cpu().numpy() if isinstance(mask_l, torch.Tensor) else np.asarray(mask_l).squeeze()
+
+            # first image
+            plt.subplot(n, 4, row*4 + 1)
+            plt.imshow(img_f_np, cmap="gray" if img_f_np.ndim == 2 else None)
+            plt.axis("off")
+            if row == 0: plt.title(f"{title} - First image")
+            # first mask
+            plt.subplot(n, 4, row*4 + 2)
+            plt.imshow(m_f, cmap="gray")
+            plt.axis("off")
+            if row == 0: plt.title("Mask")
+            # last image
+            plt.subplot(n, 4, row*4 + 3)
+            plt.imshow(img_l_np, cmap="gray" if img_l_np.ndim == 2 else None)
+            plt.axis("off")
+            if row == 0: plt.title("Last image")
+            # last mask
+            plt.subplot(n, 4, row*4 + 4)
+            plt.imshow(m_l, cmap="gray")
+            plt.axis("off")
+            if row == 0: plt.title("Mask")
+    else:
+        plt.figure(figsize=(8, 2 * n))
+        for i, idx in enumerate(indices):
+            img, mask = dataset[idx]
+            img_np = to_display_np(img)
+            mask_np = mask.squeeze().cpu().numpy() if isinstance(mask, torch.Tensor) else np.asarray(mask)
+
+            plt.subplot(n, 2, 2*i + 1)
+            plt.imshow(img_np, cmap="gray" if img_np.ndim == 2 else None)
+            plt.axis('off')
+            if i == 0: plt.title(f"{title} - Image")
+
+            plt.subplot(n, 2, 2*i + 2)
+            plt.imshow(mask_np, cmap='gray')
+            plt.axis('off')
+            if i == 0: plt.title(f"{title} - Mask")
+
     plt.tight_layout()
     plt.show()
 
 
+
 def check_accuracy(loader, model, device="cuda"):
     """Check model accuracy"""
-    num_correct = num_pixels = dice_score = iou_score = 0
+    num_correct = num_pixels = dice_score = iou_score = mAP_score = 0
     model.eval()
 
     with torch.no_grad():
-        for x, y in tqdm(loader, desc="Evaluating"):
+        for x, y in loader:
             x, y = x.to(device), y.to(device)
             if len(y.shape) == 3:
                 y = y.unsqueeze(1)
             
-            preds = torch.sigmoid(model(x))
+            preds = model(x)
             preds_binary = (preds > 0.5).float()
             
             num_correct += (preds_binary == y).sum().item()
@@ -157,8 +250,8 @@ def check_accuracy(loader, model, device="cuda"):
                 pred_sum, y_sum = pred_i.sum().item(), y_i.sum().item()
                 union = pred_sum + y_sum - intersection
                 
-                dice_score += (2.0 * intersection) / (pred_sum + y_sum + 1e-8)
-                iou_score += intersection / (union + 1e-8)
+                dice_score += (2.0 * intersection + 1e-8) / (pred_sum + y_sum + 1e-8)
+                iou_score += (intersection + 1e-8) / (union + 1e-8)
     
     total_images = len(loader.dataset)
     acc = (num_correct / num_pixels) * 100
@@ -175,7 +268,7 @@ def save_predictions_as_imgs(loader, model, folder="saved_images/", device="cuda
     with torch.no_grad():
         for i, (x, y) in enumerate(loader):
             x, y = x.to(device), y.to(device)
-            preds = torch.sigmoid(model(x))
+            preds = model(x)
             
             for j in range(x.size(0)):
                 if saved >= num_save: return
@@ -249,44 +342,91 @@ def plot_training_history(checkpoint_path):
     except Exception as e:
         print(f"❌ Error loading checkpoint: {e}")
 
-class Evolution:
-    """Simple class for handling evolution visualization from checkpoints"""
+def collect_and_plot(groups, metrics=("loss","dice","acc","iou")):
 
-    def __init__(self, checkpoint_path):
-        self.checkpoint_path = checkpoint_path
-        self.checkpoint = None
-        self.history = None
+    metrics_by_group = {}
+    
+    # Load metrics
+    for name, pattern in groups.items():
+        paths = sorted(glob.glob(pattern)) if isinstance(pattern, str) else sorted(pattern)
+        epochs, vals = [], {m: [] for m in metrics}
+        for p in paths:
+            if not os.path.exists(p): continue
+            ck = torch.load(p, map_location="cpu",weights_only= False)
+            e = ck.get("epoch", None)
+            if e is None:
+                nums = re.findall(r"(\d+)", os.path.basename(p))
+                e = int(nums[-1]) if nums else None
+            epochs.append(int(e) if e is not None else None)
+            for m in metrics: vals[m].append(float(ck.get(m, float("nan"))))
+        
+        # sort by epoch
+        if any(e is not None for e in epochs):
+            order = sorted(range(len(epochs)), key=lambda i: (epochs[i] is None, epochs[i] if epochs[i] is not None else 1e9))
+            epochs = [epochs[i] for i in order]
+            for m in metrics: vals[m] = [vals[m][i] for i in order]
+        else:
+            epochs = list(range(1, len(vals[metrics[0]])+1))
+        
+        metrics_by_group[name] = (epochs, vals)
+    
+    # Plot
+    plt.figure(figsize=(12,6))
+    for i, m in enumerate(metrics):
+        plt.subplot(2,2,i+1)
 
-    def load_checkpoint(self):
-        """Load checkpoint from path"""
-        if not os.path.exists(self.checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint not found: {self.checkpoint_path}")
+        # Find overall max and min across all groups
+        overall_max, overall_max_info = -np.inf, None
+        overall_min, overall_min_info = np.inf, None
+        for name, (ep, vals) in metrics_by_group.items():
+            if not ep: continue
+            y = np.array(vals[m])
+            # max
+            max_val = np.nanmax(y)
+            if max_val > overall_max:
+                overall_max = max_val
+                overall_max_info = (name, ep[np.nanargmax(y)], max_val)
+            # min
+            min_val = np.nanmin(y)
+            if min_val < overall_min:
+                overall_min = min_val
+                overall_min_info = (name, ep[np.nanargmin(y)], min_val)
+        
+        # Plot all lines
+        for name, (ep, vals) in metrics_by_group.items():
+            if not ep: continue
+            plt.plot(ep, vals[m], marker="o", label=name)
+        
+        # Annotate overall max
+        if overall_max_info:
+            _, x, y_val = overall_max_info
+            plt.annotate(f"max={y_val:.4f}",
+                         xy=(x, y_val),
+                         xytext=(x+1, y_val+0.02),
+                         arrowprops=dict(arrowstyle="->", color='red'),
+                         color='red')
+        
+        # Annotate overall min
+        if overall_min_info:
+            _, x, y_val = overall_min_info
+            plt.annotate(f"min={y_val:.4f}",
+                         xy=(x, y_val),
+                         xytext=(x+1, y_val-0.02),
+                         arrowprops=dict(arrowstyle="->", color='blue'),
+                         color='blue')
+        
+        plt.title(m.capitalize())
+        plt.xlabel("Epoch")
+        plt.grid(True)
+        plt.legend()
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return metrics_by_group
 
-        self.checkpoint = torch.load(self.checkpoint_path, map_location='cpu', weights_only=False)
-        return self.checkpoint
 
-    def get_history(self):
-        """Get training history from checkpoint"""
-        if self.checkpoint is None:
-            self.load_checkpoint()
 
-        self.history = self.checkpoint.get('history', {})
-        return self.history
-
-    def plot_history(self):
-        """Plot training history"""
-        if self.history is None:
-            self.get_history()
-
-        if not self.history:
-            print("❌ No training history found")
-            return
-
-        plot_training_history(self.checkpoint_path)
-
-# ...existing code...
-from torchvision.transforms import functional as TF
-# ...existing code...
 
 class Augmentation:
     @staticmethod
@@ -302,35 +442,68 @@ class Augmentation:
     @staticmethod
     def sanitize_mask(mask):
         """
-        Ensure mask is a 1xHxW float tensor with binary values {0,1}.
-        Accepts PIL Image, HxW or 1xHxW tensor, uint8 0-255 or float in [0,1] or fractional (from interpolation).
+        Robust: accept PIL.Image, numpy.ndarray, or torch.Tensor.
+        Returns a 1xHxW float tensor with binary values {0,1}.
         """
-        # to tensor if PIL or numpy
-        if not hasattr(mask, "shape"):
-            mask = v2.ToImage()(mask)
+        import PIL.Image
 
-        # if HxW -> add channel
-        if mask.ndim == 2:
-            mask = mask.unsqueeze(0)
+        # Convert PIL or other to numpy / tensor
+        if isinstance(mask, PIL.Image.Image):
+            arr = np.array(mask)
+            m = torch.from_numpy(arr)
+        elif isinstance(mask, np.ndarray):
+            m = torch.from_numpy(mask)
+        elif isinstance(mask, torch.Tensor):
+            m = mask.clone()
+        else:
+            # fallback: try converting to array then tensor
+            m = torch.from_numpy(np.asarray(mask))
 
-        # canonical dtype float
-        mask = mask.float()
+        # Ensure numeric dtype
+        m = m.float()
 
-        # if mask values are >1, assume 0-255
-        if mask.max() > 1.0:
-            mask = mask / 255.0
+        # Handle channel dimension: CxHxW or HxWxC -> collapse to HxW
+        if m.ndim == 3:
+            # common layouts: (C,H,W) or (H,W,C)
+            if m.shape[0] in (1, 3):          # C,H,W
+                m = m.mean(dim=0)
+            else:                             # H,W,C
+                m = m.mean(dim=2)
 
-        # threshold to binary
-        mask = (mask > 0.5).float()
-        return mask
+        # Now m is HxW (or already single-channel)
+        # Normalize/threshold: support 0-255 and 0-1 masks
+        if m.max() > 1.5:
+            m = (m > 127).float()
+        else:
+            m = (m > 0.5).float()
 
+        # Ensure 1xHxW
+        if m.ndim == 2:
+            m = m.unsqueeze(0)
+
+        return m
+    
     class MaskAwareRandomCrop:
-        def __init__(self, crop_size=(224, 224), margin=10, resize_to=None):
+        def __init__(self, crop_size=(224, 224), margin=10, resize_to=None, default_return="both"):
+            """
+            default_return: "both" | "image" | "mask"
+            """
             self.crop_size = crop_size
             self.margin = margin
             self.resize_to = resize_to
+            self.default_return = default_return
 
-        def __call__(self, img, mask):
+        def __call__(self, img, mask, return_type=None):
+            """
+            return_type overrides default_return. Valid values:
+            - "both"  -> (img_cropped, mask_cropped)
+            - "image" -> img_cropped
+            - "mask"  -> mask_cropped
+            """
+            rt = (return_type or self.default_return) or "both"
+            if rt not in {"both", "image", "mask"}:
+                raise ValueError("return_type must be 'both', 'image' or 'mask'")
+
             # Ensure img and mask are tensors with channel-first
             if not hasattr(img, "shape"):
                 img = v2.ToImage()(img)
@@ -368,7 +541,12 @@ class Augmentation:
             # ensure mask remains binary after any resize
             mask_cropped = Augmentation.sanitize_mask(mask_cropped)
 
-            return img_cropped, mask_cropped
+            if rt == "both":
+                return img_cropped, mask_cropped
+            elif rt == "image":
+                return img_cropped
+            else:  # "mask"
+                return mask_cropped
 
     class SynchronizedGeometric:
         """
@@ -410,8 +588,8 @@ class Augmentation:
             # random rotation
             if self.rotate_deg and self.rotate_deg > 0:
                 angle = (torch.rand(1).item() * 2 - 1) * self.rotate_deg  # uniform [-deg, deg]
-                img = TF.rotate(img, angle=angle, interpolation=InterpolationMode.BILINEAR)
-                mask = TF.rotate(mask, angle=angle, interpolation=InterpolationMode.NEAREST)
+                img = functional.rotate(img, angle=angle, interpolation=InterpolationMode.BILINEAR)
+                mask = functional.rotate(mask, angle=angle, interpolation=InterpolationMode.NEAREST)
 
             # resize
             if self.resize_to:
@@ -452,6 +630,7 @@ class Augmentation:
                 # apply image-only transform (may desynchronize if geometric)
                 if self.transform_img:
                     img = self.transform_img(img)
+                
                 # apply mask-only transform or sanitize
                 if self.transform_mask:
                     mask = self.transform_mask(mask)
@@ -459,3 +638,4 @@ class Augmentation:
                     mask = Augmentation.sanitize_mask(mask)
 
             return img, mask
+

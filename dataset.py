@@ -9,10 +9,16 @@ import random
 from torchvision.transforms import v2
 
 class _Dataset(Dataset):
-    def __init__(self, image_dir, mask_dir = None, transform=None):
+    def _default_transform(image, mask):
+        image = torch.from_numpy(np.array(image)).permute(2, 0, 1).float() / 255.0
+        mask = torch.from_numpy(np.array(mask)).float()
+        return (image, mask)
+
+    def __init__(self, image_dir, mask_dir = None, transform=_default_transform, normalize_fn = None):
         self.image_dir = image_dir
         self.mask_dir = mask_dir
         self.transform = transform
+        self.normalize = normalize_fn
         
         all_files = os.listdir(image_dir)
         self.images = [f for f in all_files if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
@@ -63,34 +69,20 @@ class _Dataset(Dataset):
 
         # Convert mask to PIL for transforms
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8), mode='L')
-
-        if self.transform:
-            try:
-                # Try mask-aware transform (image, mask)
-                image, mask = self.transform(image, mask_pil)
-                # If mask is PIL, convert to tensor
-                if isinstance(mask, Image.Image):
-                    mask = v2.ToTensor()(mask)
-                # Ensure mask is single channel and binary
-                if mask.dim() == 3:
-                    mask = mask.squeeze(0)
-                mask = (mask > 0.5).float()
-            except TypeError:
-                # Fallback: transform only image, mask as tensor
-                image = self.transform(image)
-                mask = v2.ToTensor()(mask_pil)
-                if mask.dim() == 3:
-                    mask = mask.squeeze(0)
-                mask = (mask > 0.5).float()
-        else:
-            # Manual conversion without transforms
-            image = torch.from_numpy(np.array(image)).permute(2, 0, 1).float() / 255.0
-            mask = torch.from_numpy(mask).float()
+        image, mask = self.transform(image, mask_pil)
+    
+        # If mask is PIL, convert to tensor
+        if isinstance(mask, Image.Image):
+            mask = v2.ToTensor()(mask)
         
+        # Ensure mask is 2D and binary
+        if mask.dim() == 3:
+            mask = mask.squeeze(0)
+        mask = (mask > 0.5).float()
 
-        # Final validation
-        assert mask.min() >= 0.0 and mask.max() <= 1.0, f"Mask values out of range: {mask.min()}-{mask.max()}"
-        assert len(mask.shape) == 2, f"Mask should be 2D, got shape: {mask.shape}"
+        # Apply normalization to image only
+        if self.normalize:
+            image = self.normalize(image)
 
         return image, mask
     
