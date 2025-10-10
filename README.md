@@ -80,7 +80,7 @@ Expected results: **~92% mAP** in 30-40 epochs
 ### 1. **U-Net** (Baseline)
 Classic encoder-decoder architecture with skip connections
 
-![U-Net Architecture](Unet_architecture.png)
+![U-Net Architecture](architecture_diagrams/Unet_architecture.png)
 
 **Key Components:**
 - **Encoder**: 4 downsampling blocks with max pooling
@@ -102,7 +102,7 @@ Dense skip connections for gradient flow improvement
 ### 3. **Attention U-Net**
 U-Net with attention gates on skip connections
 
-![Attention U-Net Architecture](Attention_UNet.png)
+![Attention U-Net Architecture](architecture_diagrams/Attention_UNet.png)
 
 **Key Components:**
 - **Attention Gates**: Filter skip connections based on decoder features
@@ -204,18 +204,35 @@ The project requires the following key packages:
 
 ```
 .
-├── CONFIG.py                  # Configuration file (hyperparameters, paths)
-├── model.py                   # Model architectures
-├── dataset.py                 # Custom dataset class with JSON mask parsing
-├── train.py                   # Training loops and loss functions
-├── util.py                    # Utility functions (metrics, visualization, augmentation)
-├── Image_Segmentation.ipynb   # Main experimental notebook
-├── requirements.txt           # Python dependencies
-└── checkpoints/              # Saved model checkpoints
+├── 📄 README.md                    # Comprehensive documentation
+├── 📄 requirements.txt             # Python dependencies
+├── 📄 .gitignore                   # Git ignore rules
+├── 📓 Image_Segmentation.ipynb     # Main experimental notebook
+│
+├── 🐍 Python Implementation/
+│   ├── CONFIG.py                   # Configuration file (hyperparameters, paths)
+│   ├── model.py                    # Model architectures
+│   ├── dataset.py                  # Custom dataset class with JSON mask parsing
+│   ├── train.py                    # Training loops and loss functions
+│   └── util.py                     # Utility functions (metrics, visualization, augmentation)
+│
+├── 🏗️ Architecture Diagrams/
+│   ├── Unet_architecture.png       # U-Net architecture diagram
+│   └── Attention_UNet.png          # Attention U-Net architecture diagram
+│
+├── 📊 Evaluation/
+│   ├── mAP_architecture.png        # Architecture comparison chart
+│   └── mAP_augmentation.png        # Augmentation comparison chart
+│
+├── 📈 Results/
+│   ├── mAP_results_architecture.csv # Architecture experiment data
+│   └── mAP_results_augmentation.csv # Augmentation experiment data
+│
+└── 🎭 Evolution Images/            # Training evolution visualizations
     ├── UNet/
     ├── AttentionUNet/
     ├── AttentionR2UNet/
-    └── pretrainAttentionR2Unet/
+    └── PretrainedAttentionR2UNet/
 ```
 
 ## 💾 Dataset Format
@@ -404,10 +421,10 @@ The following visualizations show how each architecture's predictions evolved du
 
 | Architecture | Evolution Visualization |
 |--------------|------------------------|
-| **U-Net** | ![U-Net Evolution](https://github.com/cky09002/Image-Segmentation-Pytorch-Attention-U-Net/blob/main/U.png) |
-| **Attention U-Net** | ![Attention U-Net Evolution](https://github.com/cky09002/Image-Segmentation-Pytorch-Attention-U-Net/blob/main/A_U_mask_evolution_idx_0.png) |
-| **Attention R2U-Net** | ![Attention R2U-Net Evolution](https://github.com/cky09002/Image-Segmentation-Pytorch-Attention-U-Net/blob/main/A_R2_U_mask_evolution_idx_0.png) |
-| **Pretrained AR2U-Net** | ![Pretrained AR2U-Net Evolution](https://github.com/cky09002/Image-Segmentation-Pytorch-Attention-U-Net/blob/main/P_A_U.png) |
+| **U-Net** | ![U-Net Evolution](https://github.com/cky09002/Image-Segmentation-Pytorch-Attention-U-Net/blob/main/evolution_images/U.png) |
+| **Attention U-Net** | ![Attention U-Net Evolution](https://github.com/cky09002/Image-Segmentation-Pytorch-Attention-U-Net/blob/main/evolution_images/A_U_mask_evolution_idx_0.png) |
+| **Attention R2U-Net** | ![Attention R2U-Net Evolution](https://github.com/cky09002/Image-Segmentation-Pytorch-Attention-U-Net/blob/main/evolution_images/A_R2_U_mask_evolution_idx_0.png) |
+| **Pretrained AR2U-Net** | ![Pretrained AR2U-Net Evolution](https://github.com/cky09002/Image-Segmentation-Pytorch-Attention-U-Net/blob/main/evolution_images/P_A_U.png) |
 
 *Green pixels: Newly correct predictions | Red pixels: Newly incorrect predictions | White pixels: Previously correct*
 
