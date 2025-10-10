@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dataset (too large for GitHub)
+Nature/
+Nature.zip
+*.zip
+
+# Model Checkpoints (too large for GitHub)
+checkpoints/
+*.pth
+*.pth.tar
+*.ckpt
+*.h5
+*.pkl
+test/
+
+# Experimental/Development Files
+CNN.ipynb
+CNN_Part_1.ipynb
+UNet_Clean.ipynb
+check_cuda.py
+hypertest.py
+
+# Duplicate/Temporary Files
+mAP_results.csv
+evolution_final_UNet_combined.png
+-Force/
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Keep these organized folders
+!requirements.txt
+!README.md
+!CONFIG.py
+!model.py
+!dataset.py
+!train.py
+!util.py
+!Image_Segmentation.ipynb
+
